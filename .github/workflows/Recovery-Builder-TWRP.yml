@@ -6,11 +6,11 @@ on:
       DEVICE_TREE:
         description: 'Custom Recovery Tree'
         required: true
-        default: 'https://github.com/cd-Crypton/custom_recovery_tree_realme_macedonia'
+        default: 'https://github.com/EternalMikaelson/twrp-pvt'
       DEVICE_TREE_BRANCH:
         description: 'Custom Recovery Tree Branch'
         required: true
-        default: 'twrp-12.1'
+        default: 'ofox'
       DEVICE_PATH:
         description: 'Specify your Device Path'
         required: true
@@ -91,23 +91,23 @@ jobs:
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
 
-    - name: Initialize Repo
+    - name: Initialize OrangeFox Source
       run: |
-        mkdir -p $WORK_DIR/android-recovery
-        cd $WORK_DIR/android-recovery
-        git config --global user.name "${{ github.actor }}"
-        git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
-        repo init --depth=1 -u https://github.com/EternalMikaelson/twrp-manifest.git -b twrp-16.0
+        mkdir -p /mnt/work/OrangeFox_sync
+        git clone --depth=1 https://gitlab.com/OrangeFox/sync.git /mnt/work/OrangeFox_sync/sync
+        cd /mnt/work/OrangeFox_sync/sync
+        chmod +x orangefox_sync.sh
+        ./orangefox_sync.sh --branch 16.0 --path "$WORK_DIR/android-recovery"
 
-    - name: Repo Sync
+    - name: Clone Private Device Tree
+      env:
+        GH_PAT: ${{ secrets.GH_PAT }}
       run: |
         cd $WORK_DIR/android-recovery
-        repo sync -c --no-clone-bundle --no-tags --optimized-fetch -j$(nproc --all) --force-sync
-
-    - name: Clone Device Tree
-      run: |
-        cd $WORK_DIR/android-recovery
-        git clone ${{ inputs.DEVICE_TREE }} -b ${{ inputs.DEVICE_TREE_BRANCH }} ./${{ inputs.DEVICE_PATH }}
+        git clone --depth=1 \
+          -b "${{ inputs.DEVICE_TREE_BRANCH }}" \
+          "https://x-access-token:${GH_PAT}@github.com/EternalMikaelson/twrp-pvt.git" \
+          "${{ inputs.DEVICE_PATH }}"
 
     - name: Telegram - Build Started
       run: |
@@ -125,9 +125,9 @@ jobs:
         # Prevent GitHub OOM kill
         export NINJA_ARGS="-j$(nproc --all) -l$(nproc --all)"
 
-        lunch twrp_${{ inputs.DEVICE_NAME }}
+        lunch twrp_avalon-bp2a-eng
 
-        m recoveryimage
+        mka adbd recoveryimage
 
     - name: Set Build Properties
       run: |
