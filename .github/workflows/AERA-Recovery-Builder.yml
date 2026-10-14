@@ -1,0 +1,188 @@
+name: AERA Recovery Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      DEVICE_TREE:
+        description: 'Custom Recovery Tree'
+        required: true
+        default: 'https://github.com/EternalMikaelson/twrp-pvt'
+      DEVICE_TREE_BRANCH:
+        description: 'Custom Recovery Tree Branch'
+        required: true
+        default: 'aera'
+      DEVICE_PATH:
+        description: 'Specify your Device Path'
+        required: true
+        default: 'device/oneplus/avalon'
+      DEVICE_NAME:
+        description: 'Specify your Device Codename'
+        required: true
+        default: 'avalon'
+
+jobs:
+  build:
+    name: Build AERA Recovery by ${{ github.actor }}
+    runs-on: ubuntu-22.04
+    if: github.event.repository.owner.id == github.event.sender.id
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      WORK_DIR: /mnt/work
+    permissions:
+      contents: write
+
+    steps:
+    - name: Check Out
+      uses: actions/checkout@v5
+
+    # ✅ MAX DISK SPACE + USE /mnt
+    - name: Maximize Build Space
+      run: |
+        echo "Before cleanup"
+        df -h
+
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /opt/hostedtoolcache
+        sudo rm -rf /usr/local/.ghcup
+        sudo apt clean
+
+        sudo mkdir -p /mnt/work
+        sudo chown $USER:$USER /mnt/work
+
+        echo "After cleanup"
+        df -h
+
+    - name: Display Inputs
+      run: |
+        echo "Device Tree: ${{ inputs.DEVICE_TREE }}"
+        echo "Device Branch: ${{ inputs.DEVICE_TREE_BRANCH }}"
+        echo "Device Path: ${{ inputs.DEVICE_PATH }}"
+        echo "Device Name: ${{ inputs.DEVICE_NAME }}"
+
+    - name: Cleanup
+      uses: rokibhasansagar/slimhub_actions@main
+
+    - name: Set Swap Space
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 24
+
+    - name: Prepare the environment
+      run: |
+        sudo apt update && sudo apt upgrade -y
+        DEBIAN_FRONTEND=noninteractive sudo apt install -yq \
+          linux-modules-extra-$(uname -r) gperf gcc-multilib g++-multilib \
+          libc6-dev lib32ncurses-dev libx11-dev lib32z-dev libxml2-utils \
+          bc ccache libncurses-dev libsdl1.2-dev build-essential git \
+          squashfs-tools imagemagick libstdc++-10-dev python3 tar
+
+    - name: Install OpenJDK
+      uses: actions/setup-java@v6
+      with:
+        distribution: 'zulu'
+        java-version: '11'
+
+    - name: Install Git-Repo
+      run: |
+        mkdir -p ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        sudo ln -sf ~/bin/repo /usr/bin/repo
+
+    - name: Initialize AERA Source
+      run: |
+        mkdir -p "$WORK_DIR/android-recovery"
+        cd "$WORK_DIR/android-recovery"
+        repo init --depth=1 -u https://github.com/AERA-Recovery/android_manifest -b aera-16.0
+        repo sync -c -j"$(nproc --all)"
+
+    - name: Clone Private Device Tree
+      env:
+        GH_PAT: ${{ secrets.GH_PAT }}
+      run: |
+        cd $WORK_DIR/android-recovery
+        git clone --depth=1 \
+          -b "${{ inputs.DEVICE_TREE_BRANCH }}" \
+          "https://x-access-token:${GH_PAT}@github.com/EternalMikaelson/twrp-pvt.git" \
+          "${{ inputs.DEVICE_PATH }}"
+
+    - name: Telegram - Build Started
+      run: |
+        curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_TOKEN }}/sendMessage" \
+          -d chat_id="${{ secrets.TG_CHAT_ID }}" \
+          -d parse_mode="HTML" \
+          -d text="😈 AERA buildbot started%0A📱 Device: ${{ inputs.DEVICE_NAME }}%0A🕒 Time: $(date)"
+
+    - name: Build AERA Recovery
+      run: |
+        cd $WORK_DIR/android-recovery
+        source build/envsetup.sh
+        export ALLOW_MISSING_DEPENDENCIES=true
+
+        # Prevent GitHub OOM kill
+        export NINJA_ARGS="-j$(nproc --all) -l$(nproc --all)"
+
+        lunch twrp_avalon-bp2a-eng
+
+        mka recoveryimage
+
+    - name: Collect AERA Files
+      run: |
+        PRODUCT_OUT="$WORK_DIR/android-recovery/out/target/product/${{ inputs.DEVICE_NAME }}"
+        RELEASE_DIR="$WORK_DIR/release"
+
+        mkdir -p "$RELEASE_DIR"
+
+        echo "Available image and ZIP files in product output:"
+        find "$PRODUCT_OUT" -maxdepth 2 -type f \( -iname '*.img' -o -iname '*.zip' \) -print
+
+        # Collect recovery images and installer ZIPs.
+        find "$PRODUCT_OUT" -maxdepth 2 -type f \
+          \( -iname 'recovery*.img' -o -iname 'AERA*.img' -o -iname '*.zip' \) \
+          -exec cp -v {} "$RELEASE_DIR/" \;
+
+        echo "Files prepared for release:"
+        ls -lh "$RELEASE_DIR"
+
+        if ! find "$RELEASE_DIR" -maxdepth 1 -type f -iname '*.zip' | grep -q .; then
+          echo "::error::No installer ZIP was found. Check the build output and ZIP-generation configuration."
+          exit 1
+        fi
+
+        if ! find "$RELEASE_DIR" -maxdepth 1 -type f -iname '*.img' | grep -q .; then
+          echo "::error::No recovery image was found in the build output."
+          exit 1
+        fi
+
+    - name: Set Build Properties
+      run: |
+        echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
+
+    - name: Upload to Release
+      uses: softprops/action-gh-release@v3
+      with:
+        files: |
+          /mnt/work/release/*.img
+          /mnt/work/release/*.zip
+        name: AERA Recovery for ${{ inputs.DEVICE_NAME }} // ${{ env.BUILD_DATE }}
+        tag_name: ${{ github.run_id }}
+
+    - name: Telegram - Build Completed
+      if: success()
+      env:
+        RELEASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.run_id }}
+      run: |
+        curl -sS -X POST "https://api.telegram.org/bot${{ secrets.TG_TOKEN }}/sendMessage" \
+          --data-urlencode "chat_id=${{ secrets.TG_CHAT_ID }}" \
+          --data-urlencode "parse_mode=HTML" \
+          --data-urlencode "text=✅ AERA buildbot finished%0A📱 Device: ${{ inputs.DEVICE_NAME }}%0A📦 <a href=\"${RELEASE_URL}\">Download Release</a>"
+
+    - name: Telegram - Build Failed
+      if: failure()
+      run: |
+        curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_TOKEN }}/sendMessage" \
+          -d chat_id="${{ secrets.TG_CHAT_ID }}" \
+          -d parse_mode="HTML" \
+          -d text="💥 AERA buildbot failed%0A📱 Device: ${{ inputs.DEVICE_NAME }}%0A❌ Check GitHub logs"
