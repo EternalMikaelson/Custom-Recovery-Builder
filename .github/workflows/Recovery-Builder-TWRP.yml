@@ -33,7 +33,7 @@ jobs:
 
     steps:
     - name: Check Out
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     # ✅ MAX DISK SPACE + USE /mnt
     - name: Maximize Build Space
@@ -79,7 +79,7 @@ jobs:
           squashfs-tools imagemagick libstdc++-10-dev python3 tar
 
     - name: Install OpenJDK
-      uses: actions/setup-java@v4
+      uses: actions/setup-java@v6
       with:
         distribution: 'zulu'
         java-version: '11'
@@ -134,7 +134,7 @@ jobs:
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
     - name: Upload to Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         files: |
           /mnt/work/android-recovery/out/target/product/${{ inputs.DEVICE_NAME }}/recovery.*
